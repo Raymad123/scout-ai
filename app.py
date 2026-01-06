@@ -1,28 +1,33 @@
-import streamlit as st
+import os
 import requests
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # -----------------------------
-# Page setup
+# App setup
 # -----------------------------
-st.set_page_config(page_title="Scout AI", page_icon="⚜️")
-st.title("⚜️ Scout AI Assistant")
-st.write("Ask any Scouts BSA / Boy Scouts related question.")
+app = FastAPI(title="Scout AI API", version="1.0")
 
 # -----------------------------
 # OpenAI client
 # -----------------------------
-api_key = st.secrets.get("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key) if api_key else None
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-if not api_key:
-    st.warning("OpenAI API key not found. AI reasoning will be limited.")
+# -----------------------------
+# Request schema
+# -----------------------------
+class Question(BaseModel):
+    question: str
 
 # -----------------------------
 # Web search (DuckDuckGo)
 # -----------------------------
-@st.cache_data(show_spinner=False)
-def scout_web_search(query):
+def scout_web_search(query: str) -> str:
     try:
         r = requests.get(
             "https://api.duckduckgo.com/",
@@ -40,57 +45,53 @@ def scout_web_search(query):
         return ""
 
 # -----------------------------
-# AI answer generation
+# AI reasoning
 # -----------------------------
-def scout_ai_answer(question, web_text):
+def scout_ai_answer(question: str, web_text: str) -> str:
     if not client:
-        return "AI reasoning is unavailable, but this question relates to Scouts BSA. Try refining your question."
+        return "OpenAI API key not configured."
 
     prompt = f"""
 You are a Scouts BSA expert.
 
 RULES:
-- Be accurate
+- Follow current Scouts BSA policies
 - Be youth-safe
-- Follow BSA policies
+- Never invent requirements
 - If unsure, say so
-- Do NOT invent requirements
 
 Web information:
-{web_text if web_text else "No direct web result found."}
+{web_text if web_text else "No direct web info found."}
 
 Question:
 {question}
 
-Answer clearly and concisely.
+Provide a clear, accurate answer.
 """
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"AI error: {e}"
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=400
+    )
+
+    return response.choices[0].message.content.strip()
 
 # -----------------------------
-# UI – FORM (prevents reruns)
+# API endpoint
 # -----------------------------
-with st.form("scout_form"):
-    question = st.text_input("Ask a Scout question:")
-    submitted = st.form_submit_button("Ask Scout AI")
+@app.post("/ask")
+def ask_scout_ai(data: Question):
+    if not data.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-if submitted and question.strip():
-    with st.spinner("Searching trusted Scout sources..."):
-        web_text = scout_web_search(question)
+    web_text = scout_web_search(data.question)
+    answer = scout_ai_answer(data.question, web_text)
 
-    with st.spinner("Thinking like a Scout leader..."):
-        answer = scout_ai_answer(question, web_text)
-
-    st.subheader("📚 Scout AI Answer")
-    st.write(answer)
-
-st.caption("⚠️ Educational use only. Always verify requirements with official Scouts BSA sources.")
+    return {
+        "question": data.question,
+        "web_info": web_text,
+        "answer": answer
+    }
+ith official Scouts BSA sources.")
